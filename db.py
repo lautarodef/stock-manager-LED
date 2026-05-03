@@ -30,13 +30,19 @@ def obtener_productos():
             p.descripcion,
             c.nombre  AS categoria,
             v.nombre  AS proveedor,
+            s.nombre  AS seccion,
+            p.box,
             p.precio_costo,
             p.precio_venta,
             p.stock_actual,
-            p.stock_minimo
+            p.stock_minimo,
+            p.categoria_id,
+            p.proveedor_id,
+            p.seccion_id
         FROM productos p
-        LEFT JOIN categorias c ON c.id = p.categoria_id
+        LEFT JOIN categorias c  ON c.id = p.categoria_id
         LEFT JOIN proveedores v ON v.id = p.proveedor_id
+        LEFT JOIN secciones s   ON s.id = p.seccion_id
         ORDER BY p.descripcion
     """)
     resultado = cursor.fetchall()
@@ -45,6 +51,9 @@ def obtener_productos():
 
 
 def guardar_producto(datos, producto_id=None):
+    """datos = (codigo, descripcion, categoria_id, proveedor_id,
+                precio_costo, precio_venta, stock_actual, stock_minimo,
+                seccion_id, box)"""
     conn = conectar()
     cursor = conn.cursor()
     if producto_id:
@@ -57,15 +66,18 @@ def guardar_producto(datos, producto_id=None):
                 precio_costo  = %s,
                 precio_venta  = %s,
                 stock_actual  = %s,
-                stock_minimo  = %s
+                stock_minimo  = %s,
+                seccion_id    = %s,
+                box           = %s
             WHERE id = %s
         """, (*datos, producto_id))
     else:
         cursor.execute("""
             INSERT INTO productos
                 (codigo, descripcion, categoria_id, proveedor_id,
-                 precio_costo, precio_venta, stock_actual, stock_minimo)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                 precio_costo, precio_venta, stock_actual, stock_minimo,
+                 seccion_id, box)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, datos)
     conn.commit()
     conn.close()
@@ -75,6 +87,37 @@ def eliminar_producto(producto_id):
     conn = conectar()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM productos WHERE id = %s", (producto_id,))
+    conn.commit()
+    conn.close()
+
+
+# ── Secciones ────────────────────────────────────────────────
+
+def obtener_secciones():
+    conn = conectar()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, nombre FROM secciones ORDER BY nombre")
+    resultado = cursor.fetchall()
+    conn.close()
+    return resultado
+
+
+def guardar_seccion(datos, seccion_id=None):
+    conn = conectar()
+    cursor = conn.cursor()
+    if seccion_id:
+        cursor.execute("UPDATE secciones SET nombre = %s WHERE id = %s",
+                       (*datos, seccion_id))
+    else:
+        cursor.execute("INSERT INTO secciones (nombre) VALUES (%s)", datos)
+    conn.commit()
+    conn.close()
+
+
+def eliminar_seccion(seccion_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM secciones WHERE id = %s", (seccion_id,))
     conn.commit()
     conn.close()
 
@@ -339,7 +382,28 @@ def obtener_resumen_ventas(fecha_desde=None, fecha_hasta=None):
     return resultado
 
 
-# ── Logica de formula ─────────────────────────────────────────
+# ── Utilidades de búsqueda ────────────────────────────────────
+
+def normalizar(texto):
+    """
+    Normaliza texto para búsqueda flexible:
+    - Minúsculas
+    - Sin acentos (á→a, é→e, etc.)
+    - Sin guiones, puntos, espacios extras
+    Permite buscar 'bujia' y encontrar 'Bujía', o 'vrbuj' y encontrar 'VR-BUJ-2001'
+    """
+    if not texto:
+        return ""
+    import unicodedata
+    texto = texto.lower().strip()
+    # Quitar acentos
+    texto = unicodedata.normalize("NFD", texto)
+    texto = "".join(c for c in texto if unicodedata.category(c) != "Mn")
+    # Quitar caracteres especiales que no aportan a la búsqueda
+    for char in ["-", "_", ".", ",", "/", " "]:
+        texto = texto.replace(char, "")
+    return texto
+
 
 def aplicar_formula(precio_costo, formula):
     """

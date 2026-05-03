@@ -3,7 +3,10 @@
 # ============================================================
 
 import flet as ft
-from db import obtener_categorias, guardar_categoria, eliminar_categoria
+from db import (
+    obtener_categorias, guardar_categoria, eliminar_categoria,
+    obtener_secciones,  guardar_seccion,  eliminar_seccion,
+)
 
 HEADING_COLOR = "#37474F"
 
@@ -229,6 +232,135 @@ def vista_categorias(page: ft.Page, area: ft.Column):
         spacing=12,
     )
 
+    # ── ABM Secciones ─────────────────────────────────────────────────────
+
+    secciones_cache = []
+
+    campo_seccion_nombre      = ft.TextField(label="Nombre de sección", width=360)
+    error_seccion             = ft.Text("", color=ft.Colors.RED_600, size=12)
+    titulo_dialogo_sec        = ft.Text("", size=18, weight=ft.FontWeight.W_600)
+    seccion_id_editando       = [None]
+
+    def limpiar_form_seccion():
+        campo_seccion_nombre.value = ""
+        error_seccion.value        = ""
+        seccion_id_editando[0]     = None
+
+    def abrir_dialogo_sec_nuevo(e):
+        limpiar_form_seccion()
+        titulo_dialogo_sec.value = "Nueva sección"
+        dialogo_sec.open = True
+        page.update()
+
+    def abrir_dialogo_sec_editar(seccion):
+        limpiar_form_seccion()
+        titulo_dialogo_sec.value  = "Editar sección"
+        seccion_id_editando[0]    = seccion["id"]
+        campo_seccion_nombre.value = seccion["nombre"]
+        dialogo_sec.open = True
+        page.update()
+
+    def guardar_sec_click(e):
+        if not campo_seccion_nombre.value.strip():
+            error_seccion.value = "El nombre es obligatorio."
+            page.update()
+            return
+        guardar_seccion((campo_seccion_nombre.value.strip(),), seccion_id_editando[0])
+        dialogo_sec.open = False
+        refrescar_secciones()
+        page.update()
+
+    def cancelar_sec(e):
+        dialogo_sec.open = False
+        page.update()
+
+    dialogo_sec = ft.AlertDialog(
+        modal=True,
+        title=titulo_dialogo_sec,
+        content=ft.Container(
+            width=400,
+            content=ft.Column(tight=True, spacing=12,
+                              controls=[campo_seccion_nombre, error_seccion]),
+        ),
+        actions=[
+            ft.TextButton("Cancelar", on_click=cancelar_sec),
+            ft.FilledButton("Guardar", on_click=guardar_sec_click),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    page.overlay.append(dialogo_sec)
+
+    # Confirmación eliminar sección
+    id_sec_eliminar     = [None]
+    nombre_sec_eliminar = ft.Text("")
+
+    def confirmar_eliminar_sec(e):
+        eliminar_seccion(id_sec_eliminar[0])
+        dialogo_confirmar_sec.open = False
+        refrescar_secciones()
+        page.update()
+
+    def cancelar_eliminar_sec(e):
+        dialogo_confirmar_sec.open = False
+        page.update()
+
+    dialogo_confirmar_sec = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Confirmar eliminación"),
+        content=ft.Column(tight=True, controls=[
+            ft.Text("¿Eliminar esta sección?"),
+            ft.Text("Los productos vinculados quedarán sin sección.",
+                    color=ft.Colors.AMBER_700, size=12),
+            nombre_sec_eliminar,
+        ]),
+        actions=[
+            ft.TextButton("Cancelar", on_click=cancelar_eliminar_sec),
+            ft.FilledButton("Eliminar", on_click=confirmar_eliminar_sec,
+                            style=ft.ButtonStyle(bgcolor=ft.Colors.RED_600)),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    page.overlay.append(dialogo_confirmar_sec)
+
+    def pedir_confirmar_sec(seccion):
+        id_sec_eliminar[0]     = seccion["id"]
+        nombre_sec_eliminar.value = seccion["nombre"]
+        dialogo_confirmar_sec.open = True
+        page.update()
+
+    tabla_secciones = ft.DataTable(
+        border=ft.border.all(1, ft.Colors.GREY_300),
+        vertical_lines=ft.BorderSide(1, ft.Colors.GREY_200),
+        heading_row_color=HEADING_COLOR,
+        heading_row_height=40,
+        data_row_min_height=42,
+        column_spacing=16,
+        columns=[
+            ft.DataColumn(ft.Text("Nombre",   weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)),
+            ft.DataColumn(ft.Text("Acciones", weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)),
+        ],
+        rows=[],
+    )
+
+    def refrescar_secciones():
+        nonlocal secciones_cache
+        secciones_cache = obtener_secciones()
+        tabla_secciones.rows = [
+            ft.DataRow(cells=[
+                ft.DataCell(ft.Text(s["nombre"], size=13)),
+                ft.DataCell(ft.Row(spacing=0, controls=[
+                    ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, icon_size=18,
+                                  tooltip="Editar",
+                                  on_click=lambda e, sec=s: abrir_dialogo_sec_editar(sec)),
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_size=18,
+                                  icon_color=ft.Colors.RED_400, tooltip="Eliminar",
+                                  on_click=lambda e, sec=s: pedir_confirmar_sec(sec)),
+                ])),
+            ])
+            for s in secciones_cache
+        ]
+        page.update()
+
     # ── Insertar en el área que nos pasó main.py ──────────────────────────
 
     area.controls.append(
@@ -245,6 +377,16 @@ def vista_categorias(page: ft.Page, area: ft.Column):
                     contador,
                     tabla,
                     texto_sin_resultados,
+                    ft.Divider(height=24),
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Text("Secciones", size=20, weight=ft.FontWeight.W_700),
+                            ft.FilledButton("Nueva sección", icon=ft.Icons.ADD,
+                                            on_click=abrir_dialogo_sec_nuevo),
+                        ],
+                    ),
+                    tabla_secciones,
                 ],
             ),
         )
@@ -252,3 +394,5 @@ def vista_categorias(page: ft.Page, area: ft.Column):
     page.update()
 
     refrescar_tabla()
+    refrescar_secciones()
+
