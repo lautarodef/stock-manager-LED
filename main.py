@@ -9,6 +9,7 @@ from proveedores import vista_proveedores
 from categorias  import vista_categorias
 from ventas      import vista_ventas
 from movimientos import vista_movimientos
+from clientes    import vista_clientes
 
 ACCENT_COLOR = "#ff5757"
 NAV_WIDTH    = 200
@@ -48,6 +49,8 @@ def main(page: ft.Page):
             vista_ventas(page, area)
         elif vista == "movimientos":
             vista_movimientos(page, area)
+        elif vista == "clientes":
+            vista_clientes(page, area)
 
     # Contenedor de la barra lateral (se actualiza al navegar)
     nav_container = ft.Container()
@@ -105,6 +108,12 @@ def main(page: ft.Page):
                             weight=ft.FontWeight.W_600),
                     item_nav("Punto de venta",  ft.Icons.POINT_OF_SALE_OUTLINED,  "ventas"),
                     item_nav("Movimientos",     ft.Icons.SWAP_VERT_OUTLINED,      "movimientos"),
+
+                    ft.Divider(height=16, color="#ffffff10"),
+
+                    ft.Text("Clientes", size=11, color=ft.Colors.GREY_700,
+                            weight=ft.FontWeight.W_600),
+                    item_nav("Clientes", ft.Icons.PEOPLE_OUTLINE, "clientes"),
                 ],
             ),
         )

@@ -243,9 +243,11 @@ def editar_medio_pago(movimiento_id, nuevo_medio_pago):
     conn.close()
 
 
-def registrar_movimiento(tipo, items, medio_pago=None, observacion=None):
+def registrar_movimiento(tipo, items, medio_pago=None, observacion=None, cliente_id=None):
     """
     Registra un movimiento completo (venta, entrada o ajuste) con sus items.
+    Retorna el id del movimiento creado.
+    
 
     tipo      : 'venta' | 'entrada' | 'ajuste'
     items     : lista de dicts con keys: producto_id, cantidad, precio_unitario
@@ -262,9 +264,9 @@ def registrar_movimiento(tipo, items, medio_pago=None, observacion=None):
     total = sum(i["cantidad"] * i["precio_unitario"] for i in items)
 
     cursor.execute("""
-        INSERT INTO movimientos (tipo, medio_pago, total, observacion)
-        VALUES (%s, %s, %s, %s)
-    """, (tipo, medio_pago, total, observacion))
+        INSERT INTO movimientos (tipo, medio_pago, total, observacion, cliente_id)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (tipo, medio_pago, total, observacion, cliente_id))
     movimiento_id = cursor.lastrowid
 
     for item in items:
@@ -380,6 +382,167 @@ def obtener_resumen_ventas(fecha_desde=None, fecha_hasta=None):
     resultado = cursor.fetchall()
     conn.close()
     return resultado
+
+
+# ── Clientes ─────────────────────────────────────────────────
+
+def obtener_clientes():
+    conn = conectar()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT
+            c.id, c.nombre, c.telefono, c.email, c.direccion,
+            c.dni, c.cuit, c.situacion_arca, c.notas, c.fecha_alta,
+            COALESCE(SUM(
+                CASE WHEN cc.tipo = 'cargo' THEN cc.monto
+                     WHEN cc.tipo = 'pago'  THEN -cc.monto
+                     ELSE 0 END
+            ), 0) AS saldo
+        FROM clientes c
+        LEFT JOIN cuenta_corriente cc ON cc.cliente_id = c.id
+        GROUP BY c.id
+        ORDER BY c.nombre
+    """)
+    resultado = cursor.fetchall()
+    conn.close()
+    return resultado
+
+
+def obtener_cliente(cliente_id):
+    conn = conectar()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT
+            c.*,
+            COALESCE(SUM(
+                CASE WHEN cc.tipo = 'cargo' THEN cc.monto
+                     WHEN cc.tipo = 'pago'  THEN -cc.monto
+                     ELSE 0 END
+            ), 0) AS saldo
+        FROM clientes c
+        LEFT JOIN cuenta_corriente cc ON cc.cliente_id = c.id
+        WHERE c.id = %s
+        GROUP BY c.id
+    """, (cliente_id,))
+    resultado = cursor.fetchone()
+    conn.close()
+    return resultado
+
+
+def guardar_cliente(datos, cliente_id=None):
+    """datos = (nombre, telefono, email, direccion, dni, cuit, situacion_arca, notas)"""
+    conn = conectar()
+    cursor = conn.cursor()
+    if cliente_id:
+        cursor.execute("""
+            UPDATE clientes SET
+                nombre         = %s,
+                telefono       = %s,
+                email          = %s,
+                direccion      = %s,
+                dni            = %s,
+                cuit           = %s,
+                situacion_arca = %s,
+                notas          = %s
+            WHERE id = %s
+        """, (*datos, cliente_id))
+    else:
+        cursor.execute("""
+            INSERT INTO clientes
+                (nombre, telefono, email, direccion, dni, cuit, situacion_arca, notas)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, datos)
+    conn.commit()
+    conn.close()
+
+
+def eliminar_cliente(cliente_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM clientes WHERE id = %s", (cliente_id,))
+    conn.commit()
+    conn.close()
+
+
+# ── Cuenta corriente ──────────────────────────────────────────
+
+def obtener_cuenta_corriente(cliente_id):
+    """Devuelve todos los movimientos de cuenta corriente de un cliente, más recientes primero."""
+    conn = conectar()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT
+            cc.id,
+            cc.tipo,
+            cc.monto,
+            cc.fecha,
+            cc.fecha_vencimiento,
+            cc.observacion,
+            m.total  AS venta_total,
+            cc.movimiento_id
+        FROM cuenta_corriente cc
+        LEFT JOIN movimientos m ON m.id = cc.movimiento_id
+        WHERE cc.cliente_id = %s
+        ORDER BY cc.fecha DESC
+    """, (cliente_id,))
+    resultado = cursor.fetchall()
+    conn.close()
+    return resultado
+
+
+def registrar_cargo(cliente_id, monto, fecha_vencimiento=None,
+                    movimiento_id=None, observacion=None):
+    """Registra una deuda nueva en la cuenta corriente del cliente."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO cuenta_corriente
+            (cliente_id, tipo, monto, fecha_vencimiento, movimiento_id, observacion)
+        VALUES (%s, 'cargo', %s, %s, %s, %s)
+    """, (cliente_id, monto, fecha_vencimiento, movimiento_id, observacion))
+    conn.commit()
+    conn.close()
+
+
+def registrar_pago(cliente_id, monto, observacion=None):
+    """Registra un pago en la cuenta corriente del cliente."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO cuenta_corriente
+            (cliente_id, tipo, monto, observacion)
+        VALUES (%s, 'pago', %s, %s)
+    """, (cliente_id, monto, observacion))
+    conn.commit()
+    conn.close()
+
+
+def obtener_historial_compras(cliente_id):
+    """Devuelve las ventas vinculadas al cliente."""
+    conn = conectar()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT
+            m.id,
+            m.fecha,
+            m.total,
+            m.medio_pago,
+            m.observacion
+        FROM movimientos m
+        WHERE m.cliente_id = %s AND m.tipo = 'venta'
+        ORDER BY m.fecha DESC
+    """, (cliente_id,))
+    movimientos = cursor.fetchall()
+    for mov in movimientos:
+        cursor.execute("""
+            SELECT mi.cantidad, mi.precio_unitario, mi.subtotal, p.descripcion AS producto
+            FROM movimiento_items mi
+            JOIN productos p ON p.id = mi.producto_id
+            WHERE mi.movimiento_id = %s
+        """, (mov["id"],))
+        mov["items"] = cursor.fetchall()
+    conn.close()
+    return movimientos
 
 
 # ── Utilidades de búsqueda ────────────────────────────────────

@@ -5,7 +5,7 @@
 # ============================================================
 
 import flet as ft
-from db import obtener_productos, registrar_movimiento, normalizar
+from db import obtener_productos, registrar_movimiento, normalizar, obtener_clientes, registrar_cargo
 
 HEADING_COLOR = "#37474F"
 ACCENT_COLOR  = "#ff5757"
@@ -15,12 +15,14 @@ def vista_ventas(page: ft.Page, area: ft.Column):
 
     productos_catalog = []
     carrito           = []
+    clientes_data     = []
 
     # ── Catálogo ──────────────────────────────────────────────────────────
 
     def cargar_catalogo():
-        nonlocal productos_catalog
+        nonlocal productos_catalog, clientes_data
         productos_catalog = obtener_productos()
+        clientes_data     = obtener_clientes()
 
     # ── Panel izquierdo: lista de productos ───────────────────────────────
 
@@ -173,6 +175,7 @@ def vista_ventas(page: ft.Page, area: ft.Column):
             ft.dropdown.Option(key="efectivo",      text="Efectivo"),
             ft.dropdown.Option(key="transferencia", text="Transferencia"),
             ft.dropdown.Option(key="tarjeta",       text="Tarjeta"),
+            ft.dropdown.Option(key="cuenta_corriente", text="Cuenta corriente"),
         ],
         value="efectivo",
         on_change=lambda e: actualizar_vuelto(),
@@ -186,10 +189,33 @@ def vista_ventas(page: ft.Page, area: ft.Column):
     vuelto_text   = ft.Text("", size=13, weight=ft.FontWeight.W_600, color=ft.Colors.GREEN_700)
     fila_efectivo = ft.Row(visible=True, spacing=10,
                            controls=[campo_entregado, vuelto_text])
+
+    # Selector de cliente (opcional)
+    drop_cliente = ft.Dropdown(
+        label="Cliente (opcional)",
+        width=220,
+        options=[],
+        on_change=lambda e: actualizar_vuelto(),
+    )
+
+    campo_vencimiento = ft.TextField(
+        label="Vencimiento CC",
+        width=160,
+        hint_text="DD/MM/AAAA",
+        visible=False,
+    )
+
+    fila_cliente = ft.Row(
+        spacing=10,
+        controls=[drop_cliente, campo_vencimiento],
+    )
+
     campo_obs     = ft.TextField(label="Observación", width=175, height=42)
 
     def actualizar_vuelto(e=None):
-        fila_efectivo.visible = drop_medio_pago.value == "efectivo"
+        medio = drop_medio_pago.value
+        fila_efectivo.visible     = medio == "efectivo"
+        campo_vencimiento.visible = medio == "cuenta_corriente"
         if fila_efectivo.visible:
             try:
                 entregado = float(campo_entregado.value.strip().replace(",", "."))
@@ -284,35 +310,77 @@ def vista_ventas(page: ft.Page, area: ft.Column):
 
     def limpiar_carrito():
         carrito.clear()
-        campo_obs.value       = ""
-        campo_entregado.value = ""
-        vuelto_text.value     = ""
-        drop_medio_pago.value = "efectivo"
-        fila_efectivo.visible = True
+        campo_obs.value           = ""
+        campo_entregado.value     = ""
+        campo_vencimiento.value   = ""
+        vuelto_text.value         = ""
+        drop_medio_pago.value     = "efectivo"
+        drop_cliente.value        = None
+        fila_efectivo.visible     = True
+        campo_vencimiento.visible = False
         actualizar_carrito()
 
     def confirmar_venta(e):
         if not carrito:
             mostrar_snack("El carrito está vacío.", error=True)
             return
-        if drop_medio_pago.value == "efectivo" and campo_entregado.value.strip():
+        medio      = drop_medio_pago.value
+        cliente_id = int(drop_cliente.value) if drop_cliente.value else None
+
+        # Validar cuenta corriente requiere cliente
+        if medio == "cuenta_corriente" and not cliente_id:
+            mostrar_snack("Seleccioná un cliente para cargar a cuenta corriente.", error=True)
+            return
+
+        # Validar efectivo
+        if medio == "efectivo" and campo_entregado.value.strip():
             try:
                 if float(campo_entregado.value.strip().replace(",", ".")) < calcular_total():
                     mostrar_snack("El monto entregado es menor al total.", error=True)
                     return
             except ValueError:
                 pass
+
         total = calcular_total()
-        registrar_movimiento(
+
+        # Registrar la venta (medio_pago = cuenta_corriente se guarda como tal)
+        mov_id = registrar_movimiento(
             tipo="venta",
             items=[{"producto_id": i["producto"]["id"], "cantidad": i["cantidad"],
                     "precio_unitario": i["precio_unitario"]} for i in carrito],
-            medio_pago=drop_medio_pago.value,
+            medio_pago=medio if medio != "cuenta_corriente" else None,
             observacion=campo_obs.value.strip() or None,
+            cliente_id=cliente_id,
         )
+
+        # Si es cuenta corriente, generar cargo
+        if medio == "cuenta_corriente" and cliente_id:
+            venc_str = campo_vencimiento.value.strip()
+            venc     = None
+            if venc_str:
+                try:
+                    from datetime import datetime
+                    venc = datetime.strptime(venc_str, "%d/%m/%Y").date()
+                except ValueError:
+                    pass
+            if not venc:
+                venc = date.today() + timedelta(days=30)
+            registrar_cargo(
+                cliente_id=cliente_id,
+                monto=total,
+                fecha_vencimiento=venc,
+                movimiento_id=mov_id,
+                observacion=campo_obs.value.strip() or f"Venta #{mov_id}",
+            )
+
         mostrar_snack(f"Venta registrada — Total: $ {total:,.2f}")
         limpiar_carrito()
         cargar_catalogo()
+        # Recargar opciones de clientes en el dropdown
+        drop_cliente.options = [ft.dropdown.Option(key="", text="— Sin cliente —")] + [
+            ft.dropdown.Option(key=str(c["id"]), text=c["nombre"])
+            for c in clientes_data
+        ]
         filtrar_productos(buscador.value, filtro_box.value)
 
     def mostrar_snack(mensaje, error=False):
@@ -362,6 +430,7 @@ def vista_ventas(page: ft.Page, area: ft.Column):
                 ft.Divider(),
                 ft.Column(spacing=6, controls=[
                     ft.Row(spacing=10, controls=[drop_medio_pago, campo_obs]),
+                    fila_cliente,
                     fila_efectivo,
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -391,6 +460,13 @@ def vista_ventas(page: ft.Page, area: ft.Column):
 
     cargar_catalogo()
     filtrar_productos()
+
+    # Cargar opciones de clientes en el dropdown
+    drop_cliente.options = [ft.dropdown.Option(key="", text="— Sin cliente —")] + [
+        ft.dropdown.Option(key=str(c["id"]), text=c["nombre"])
+        for c in clientes_data
+    ]
+    drop_cliente.value = ""
 
     area.controls.append(
         ft.Container(
