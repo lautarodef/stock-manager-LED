@@ -299,10 +299,6 @@ def registrar_movimiento(tipo, items, medio_pago=None, observacion=None, cliente
 
 
 def obtener_movimientos(tipo=None, fecha_desde=None, fecha_hasta=None, limit=200):
-    """
-    Devuelve movimientos con sus items agrupados.
-    Filtra opcionalmente por tipo y rango de fechas.
-    """
     conn = conectar()
     cursor = conn.cursor(dictionary=True)
 
@@ -328,15 +324,17 @@ def obtener_movimientos(tipo=None, fecha_desde=None, fecha_hasta=None, limit=200
             m.fecha,
             m.medio_pago,
             m.total,
-            m.observacion
+            m.observacion,
+            m.cliente_id,
+            c.nombre AS cliente_nombre
         FROM movimientos m
+        LEFT JOIN clientes c ON c.id = m.cliente_id
         {where}
         ORDER BY m.fecha DESC
         LIMIT %s
     """, (*params, limit))
     movimientos = cursor.fetchall()
 
-    # Traer items de cada movimiento
     for mov in movimientos:
         cursor.execute("""
             SELECT
@@ -372,7 +370,7 @@ def obtener_resumen_ventas(fecha_desde=None, fecha_hasta=None):
     where = "WHERE " + " AND ".join(condiciones)
     cursor.execute(f"""
         SELECT
-            COALESCE(medio_pago, 'sin especificar') AS medio_pago,
+            COALESCE(medio_pago, 'sin_especificar') AS medio_pago,
             COUNT(*)                                AS cantidad,
             SUM(total)                              AS total
         FROM movimientos

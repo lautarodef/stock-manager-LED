@@ -51,6 +51,17 @@ def main(page: ft.Page):
             vista_movimientos(page, area)
         elif vista == "clientes":
             vista_clientes(page, area)
+            # Si hay un cliente pendiente de abrir, abrimos su perfil
+            if hasattr(page, "data") and page.data and page.data.get("abrir_cliente_id"):
+                cid = page.data.pop("abrir_cliente_id")
+                # Damos un frame para que la vista cargue antes de abrir el perfil
+                import threading
+                def _abrir():
+                    import time; time.sleep(0.3)
+                    # La vista_clientes expone abrir_perfil via page._abrir_perfil_cliente
+                    if hasattr(page, "_abrir_perfil_cliente"):
+                        page._abrir_perfil_cliente(cid)
+                threading.Thread(target=_abrir, daemon=True).start()
 
     # Contenedor de la barra lateral (se actualiza al navegar)
     nav_container = ft.Container()
@@ -117,6 +128,9 @@ def main(page: ft.Page):
                 ],
             ),
         )
+
+    # Exponer navegar para uso desde otras vistas
+    page._navegar = navegar
 
     # Layout principal: se arma una sola vez
     nav_container.content = barra_lateral("productos")

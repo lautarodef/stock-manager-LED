@@ -595,6 +595,9 @@ def vista_clientes(page: ft.Page, area: ft.Column):
 
     refrescar_lista()
 
+    # Exponer abrir_perfil para navegación desde otras vistas
+    page._abrir_perfil_cliente = abrir_perfil
+
     area.controls.append(
         ft.Container(
             alignment=ft.alignment.top_center,
