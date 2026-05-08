@@ -9,6 +9,7 @@ from db import (
     obtener_cuenta_corriente, registrar_cargo, registrar_pago,
     obtener_historial_compras, normalizar,
 )
+from detalle_venta import crear_dialogo_detalle
 
 HEADING_COLOR = "#37474F"
 ACCENT_COLOR  = "#ff5757"
@@ -23,8 +24,15 @@ SITUACION_LABEL = {
 def vista_clientes(page: ft.Page, area: ft.Column):
 
     clientes_cache = []
-    vista_actual   = ["lista"]   # "lista" | "perfil"
+    vista_actual   = ["lista"]
     cliente_activo = [None]
+
+    # Diálogo de detalle de venta (reutilizable)
+    abrir_detalle_venta = crear_dialogo_detalle(
+        page,
+        on_refrescar=None,  # se actualiza abajo
+        on_ir_cliente=lambda cid: abrir_perfil(cid),
+    )
 
     # ══════════════════════════════════════════════════════════
     #  FORMULARIO ALTA / EDICIÓN DE CLIENTE
@@ -502,32 +510,6 @@ def vista_clientes(page: ft.Page, area: ft.Column):
                          visible=len(movimientos_cc) == 0)
 
         # ── Historial de compras ──────────────────────────────
-        filas_historial = []
-        for venta in historial:
-            items_str = ", ".join(
-                f"{it['producto']} x{it['cantidad']}" for it in venta["items"]
-            )
-            if len(items_str) > 70:
-                items_str = items_str[:67] + "..."
-            filas_historial.append(
-                ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(
-                        venta["fecha"].strftime("%d/%m/%Y %H:%M")
-                        if hasattr(venta["fecha"], "strftime") else str(venta["fecha"]),
-                        size=12,
-                    )),
-                    ft.DataCell(ft.Text(items_str or "—", size=12)),
-                    ft.DataCell(ft.Text(
-                        (venta["medio_pago"] or "—").capitalize(), size=12,
-                        color=ft.Colors.GREY_600,
-                    )),
-                    ft.DataCell(ft.Text(
-                        f"$ {float(venta['total']):,.2f}", size=12,
-                        weight=ft.FontWeight.W_500,
-                    )),
-                ])
-            )
-
         tabla_historial = ft.DataTable(
             border=ft.border.all(1, ft.Colors.GREY_300),
             vertical_lines=ft.BorderSide(1, ft.Colors.GREY_200),
@@ -540,12 +522,49 @@ def vista_clientes(page: ft.Page, area: ft.Column):
                 ft.DataColumn(ft.Text("Productos",  weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)),
                 ft.DataColumn(ft.Text("Medio pago", weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)),
                 ft.DataColumn(ft.Text("Total",      weight=ft.FontWeight.W_600, color=ft.Colors.WHITE), numeric=True),
+                ft.DataColumn(ft.Text("",           weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)),
             ],
-            rows=filas_historial,
+            rows=[
+                ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(
+                        venta["fecha"].strftime("%d/%m/%Y %H:%M")
+                        if hasattr(venta["fecha"], "strftime") else str(venta["fecha"]),
+                        size=12,
+                    )),
+                    ft.DataCell(ft.Text(
+                        ", ".join(
+                            f"{it['producto']} x{it['cantidad']}"
+                            for it in venta["items"]
+                        )[:55] + ("..." if len(", ".join(
+                            f"{it['producto']} x{it['cantidad']}"
+                            for it in venta["items"]
+                        )) > 55 else ""),
+                        size=12,
+                    )),
+                    ft.DataCell(ft.Text(
+                        (venta["medio_pago"] or "—").capitalize(),
+                        size=12, color=ft.Colors.GREY_600,
+                    )),
+                    ft.DataCell(ft.Text(
+                        f"$ {float(venta['total']):,.2f}",
+                        size=12, weight=ft.FontWeight.W_500,
+                    )),
+                    ft.DataCell(
+                        ft.IconButton(
+                            icon=ft.Icons.RECEIPT_LONG_OUTLINED,
+                            icon_size=17,
+                            tooltip="Ver detalle / imprimir",
+                            on_click=lambda e, v=venta: abrir_detalle_venta({
+                                **v,
+                                "cliente_nombre": cliente["nombre"],
+                                "cliente_id":     cliente["id"],
+                            }),
+                        )
+                    ),
+                ])
+                for venta in historial
+            ],
         )
-        sin_historial = ft.Text("Sin compras registradas.",
-                                color=ft.Colors.GREY_500, italic=True, size=13,
-                                visible=len(historial) == 0)
 
         contenido_perfil.controls.extend([
             encabezado,
@@ -556,7 +575,8 @@ def vista_clientes(page: ft.Page, area: ft.Column):
             ft.Container(height=16),
             ft.Text("Historial de compras", size=18, weight=ft.FontWeight.W_600),
             tabla_historial,
-            sin_historial,
+            ft.Text("Sin compras registradas.", color=ft.Colors.GREY_500,
+                    italic=True, size=13, visible=len(historial) == 0),
         ])
 
         mostrar_vista("perfil")
