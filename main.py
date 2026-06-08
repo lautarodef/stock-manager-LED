@@ -4,12 +4,13 @@
 
 import flet as ft
 
-from productos   import vista_productos
-from proveedores import vista_proveedores
-from categorias  import vista_categorias
-from ventas      import vista_ventas
-from movimientos import vista_movimientos
-from clientes    import vista_clientes
+from productos            import vista_productos
+from proveedores          import vista_proveedores
+from categorias           import vista_categorias
+from ventas               import vista_ventas
+from movimientos          import vista_movimientos
+from clientes             import vista_clientes
+from actualizacion_precios import vista_actualizacion_precios
 
 ACCENT_COLOR = "#ff5757"
 NAV_WIDTH    = 200
@@ -49,6 +50,8 @@ def main(page: ft.Page):
             vista_ventas(page, area)
         elif vista == "movimientos":
             vista_movimientos(page, area)
+        elif vista == "actualizacion_precios":
+            vista_actualizacion_precios(page, area)
         elif vista == "clientes":
             vista_clientes(page, area)
             # Si hay un cliente pendiente de abrir, abrimos su perfil
@@ -125,6 +128,12 @@ def main(page: ft.Page):
                     ft.Text("Clientes", size=11, color=ft.Colors.GREY_700,
                             weight=ft.FontWeight.W_600),
                     item_nav("Clientes", ft.Icons.PEOPLE_OUTLINE, "clientes"),
+
+                    ft.Divider(height=16, color="#ffffff10"),
+
+                    ft.Text("Precios", size=11, color=ft.Colors.GREY_700,
+                            weight=ft.FontWeight.W_600),
+                    item_nav("Actualizar precios", ft.Icons.PRICE_CHANGE_OUTLINED, "actualizacion_precios"),
                 ],
             ),
         )

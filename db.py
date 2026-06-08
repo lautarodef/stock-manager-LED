@@ -34,6 +34,7 @@ def obtener_productos():
             p.box,
             p.precio_costo,
             p.precio_venta,
+            p.precio_dolar,
             p.stock_actual,
             p.stock_minimo,
             p.categoria_id,
@@ -65,6 +66,7 @@ def guardar_producto(datos, producto_id=None):
                 proveedor_id  = %s,
                 precio_costo  = %s,
                 precio_venta  = %s,
+                precio_dolar  = %s,
                 stock_actual  = %s,
                 stock_minimo  = %s,
                 seccion_id    = %s,
@@ -75,9 +77,9 @@ def guardar_producto(datos, producto_id=None):
         cursor.execute("""
             INSERT INTO productos
                 (codigo, descripcion, categoria_id, proveedor_id,
-                 precio_costo, precio_venta, stock_actual, stock_minimo,
+                 precio_costo, precio_venta, precio_dolar, stock_actual, stock_minimo,
                  seccion_id, box)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, datos)
     conn.commit()
     conn.close()
@@ -585,3 +587,127 @@ def aplicar_formula(precio_costo, formula):
         return precio
     except Exception:
         return None
+
+
+# ── Actualización masiva de precios ──────────────────────────
+
+def obtener_productos_para_actualizar(proveedor_id=None, categoria_ids=None):
+    """
+    Devuelve productos con precio_costo > 0, filtrados opcionalmente
+    por proveedor y/o lista de categoria_ids.
+    """
+    conn = conectar()
+    cursor = conn.cursor(dictionary=True)
+
+    condiciones = ["p.precio_costo > 0"]
+    params = []
+
+    if proveedor_id:
+        condiciones.append("p.proveedor_id = %s")
+        params.append(proveedor_id)
+
+    if categoria_ids:
+        placeholders = ", ".join(["%s"] * len(categoria_ids))
+        condiciones.append(f"p.categoria_id IN ({placeholders})")
+        params.extend(categoria_ids)
+
+    where = "WHERE " + " AND ".join(condiciones)
+
+    cursor.execute(f"""
+        SELECT
+            p.id,
+            p.descripcion,
+            p.codigo,
+            p.precio_costo,
+            p.precio_venta,
+            c.nombre AS categoria,
+            v.nombre AS proveedor,
+            v.formula
+        FROM productos p
+        LEFT JOIN categorias c  ON c.id = p.categoria_id
+        LEFT JOIN proveedores v ON v.id = p.proveedor_id
+        {where}
+        ORDER BY p.descripcion
+    """, params)
+
+    resultado = cursor.fetchall()
+    conn.close()
+    return resultado
+
+
+def aplicar_actualizacion_masiva(producto_ids_y_precios):
+    """
+    Recibe lista de dicts: [{ id, nuevo_costo, nuevo_venta }, ...]
+    y los actualiza en bloque en una sola transacción.
+    Devuelve la cantidad de filas afectadas.
+    """
+    if not producto_ids_y_precios:
+        return 0
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    for item in producto_ids_y_precios:
+        cursor.execute(
+            "UPDATE productos SET precio_costo = %s, precio_venta = %s WHERE id = %s",
+            (round(item["nuevo_costo"], 2), round(item["nuevo_venta"], 2), item["id"])
+        )
+
+    conn.commit()
+    afectados = len(producto_ids_y_precios)
+    conn.close()
+    return afectados
+
+
+# ── Configuración (dolar_oficial / dolar_led) ─────────────────
+
+def obtener_config():
+    """Devuelve dict con todas las claves de config: { 'dolar_oficial': X, 'dolar_led': Y }"""
+    conn = conectar()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT clave, valor FROM config")
+    resultado = {row["clave"]: float(row["valor"]) for row in cursor.fetchall()}
+    conn.close()
+    return resultado
+
+
+def guardar_config(clave, valor):
+    """Actualiza o inserta una clave de configuración."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO config (clave, valor) VALUES (%s, %s) ON DUPLICATE KEY UPDATE valor = %s",
+        (clave, valor, valor)
+    )
+    conn.commit()
+    conn.close()
+
+
+def recalcular_precios_dolar_led(dolar_led):
+    """
+    Recalcula precio_venta de todos los productos que tienen precio_dolar > 0
+    usando: precio_venta = redondear(precio_dolar * dolar_led)
+    """
+    conn = conectar()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, precio_dolar FROM productos WHERE precio_dolar > 0")
+    productos = cursor.fetchall()
+    for p in productos:
+        nuevo_venta = redondear_precio(float(p["precio_dolar"]) * dolar_led)
+        cursor.execute(
+            "UPDATE productos SET precio_venta = %s WHERE id = %s",
+            (nuevo_venta, p["id"])
+        )
+    conn.commit()
+    afectados = len(productos)
+    conn.close()
+    return afectados
+
+
+def redondear_precio(precio):
+    """
+    Redondea al múltiplo de 50 más cercano hacia arriba.
+    Ej: 8.712 → 8.750 | 1.234 → 1.250 | 10.001 → 10.050
+    """
+    import math
+    return math.ceil(precio / 50) * 50

@@ -10,69 +10,78 @@ from db import (
     obtener_secciones,
     guardar_producto,
     eliminar_producto,
-    aplicar_formula,
     normalizar,
+    obtener_config,
+    redondear_precio,
 )
 
 HEADING_COLOR = "#37474F"
+MARGEN_VENTA  = 1.45   # +45% sobre precio costo
 
 
 def vista_productos(page: ft.Page, area: ft.Column):
 
     productos_cache  = []
     proveedores_data = []
+    config_cache     = {"dolar_oficial": 1000.0, "dolar_led": 1000.0}
 
     # ── Formulario ───────────────────────────────────────────────────────
 
     campo_codigo       = ft.TextField(label="Código",       width=160)
     campo_descripcion  = ft.TextField(label="Descripción",  expand=True)
-    campo_precio_costo = ft.TextField(label="Precio costo", width=150, keyboard_type=ft.KeyboardType.NUMBER)
-    campo_precio_venta = ft.TextField(label="Precio venta", width=150, keyboard_type=ft.KeyboardType.NUMBER)
-    campo_stock        = ft.TextField(label="Stock actual", width=130, keyboard_type=ft.KeyboardType.NUMBER)
-    campo_stock_min    = ft.TextField(label="Stock mínimo", width=130, keyboard_type=ft.KeyboardType.NUMBER)
-    campo_box          = ft.TextField(label="Box",          width=120)
+    campo_precio_costo = ft.TextField(
+        label="Precio costo (factura $)",
+        width=200,
+        keyboard_type=ft.KeyboardType.NUMBER,
+    )
+
+    # Precio venta y dólar se calculan solos — solo lectura informativa
+    hint_calculo = ft.Text("", size=11, color=ft.Colors.GREEN_700, italic=True)
+
+    campo_stock     = ft.TextField(label="Stock actual", width=130, keyboard_type=ft.KeyboardType.NUMBER)
+    campo_stock_min = ft.TextField(label="Stock mínimo", width=130, keyboard_type=ft.KeyboardType.NUMBER)
+    campo_box       = ft.TextField(label="Box",          width=120)
 
     drop_categoria = ft.Dropdown(label="Categoría", width=200, options=[])
     drop_proveedor = ft.Dropdown(label="Proveedor",  width=200, options=[])
     drop_seccion   = ft.Dropdown(label="Sección",    width=180, options=[])
 
-    hint_precio          = ft.Text("", size=11, color=ft.Colors.GREEN_700, italic=True)
     titulo_dialogo       = ft.Text("", size=18, weight=ft.FontWeight.W_600)
     error_dialogo        = ft.Text("", color=ft.Colors.RED_600, size=12)
     producto_id_editando = [None]
 
-    def formula_del_proveedor_seleccionado():
-        if not drop_proveedor.value:
-            return None
-        pid = int(drop_proveedor.value)
-        for prov in proveedores_data:
-            if prov["id"] == pid:
-                return prov.get("formula") or None
-        return None
+    def calcular_precios(costo_str):
+        """Devuelve (precio_venta, precio_dolar) o (None, None) si el costo es inválido."""
+        try:
+            costo = float(costo_str.strip().replace(",", "."))
+            if costo <= 0:
+                return None, None
+            precio_venta = redondear_precio(costo * MARGEN_VENTA)
+            dolar_oficial = config_cache.get("dolar_oficial", 1000.0)
+            precio_dolar  = round(precio_venta / dolar_oficial, 4) if dolar_oficial else 0
+            return precio_venta, precio_dolar
+        except (ValueError, ZeroDivisionError):
+            return None, None
 
-    def recalcular_precio_venta(e=None):
-        formula   = formula_del_proveedor_seleccionado()
-        costo_str = campo_precio_costo.value.strip().replace(",", ".")
-        if formula and costo_str:
-            try:
-                resultado = aplicar_formula(float(costo_str), formula)
-                if resultado is not None:
-                    campo_precio_venta.value = f"{resultado:.2f}"
-                    hint_precio.value = f"Calculado con fórmula del proveedor ({formula})"
-                    hint_precio.color = ft.Colors.GREEN_700
-                else:
-                    hint_precio.value = ""
-            except ValueError:
-                hint_precio.value = ""
+    def actualizar_hint(e=None):
+        costo_str = campo_precio_costo.value or ""
+        pv, pd = calcular_precios(costo_str)
+        if pv is not None:
+            hint_calculo.value  = (
+                f"Precio venta: $ {pv:,.0f}  |  "
+                f"USD: {pd:,.4f}  "
+                f"(dólar oficial: $ {config_cache.get('dolar_oficial', 0):,.0f})"
+            )
+            hint_calculo.color = ft.Colors.GREEN_700
         else:
-            hint_precio.value = ""
+            hint_calculo.value = ""
         page.update()
 
-    campo_precio_costo.on_change = recalcular_precio_venta
-    drop_proveedor.on_change     = recalcular_precio_venta
+    campo_precio_costo.on_change = actualizar_hint
 
     def cargar_selects():
-        nonlocal proveedores_data
+        nonlocal proveedores_data, config_cache
+        config_cache     = obtener_config()
         proveedores_data = obtener_proveedores()
         drop_categoria.options = [
             ft.dropdown.Option(key=str(c["id"]), text=c["nombre"])
@@ -89,24 +98,31 @@ def vista_productos(page: ft.Page, area: ft.Column):
 
     def limpiar_formulario():
         for c in [campo_codigo, campo_descripcion, campo_precio_costo,
-                  campo_precio_venta, campo_stock, campo_stock_min, campo_box]:
+                  campo_stock, campo_stock_min, campo_box]:
             c.value = ""
         drop_categoria.value    = None
         drop_proveedor.value    = None
         drop_seccion.value      = None
         error_dialogo.value     = ""
-        hint_precio.value       = ""
+        hint_calculo.value      = ""
         producto_id_editando[0] = None
 
     def validar_formulario():
         if not campo_descripcion.value.strip():
             error_dialogo.value = "La descripción es obligatoria."
             return False
-        for c in [campo_precio_costo, campo_precio_venta, campo_stock, campo_stock_min]:
-            val = c.value.strip().replace(",", ".")
+        costo_str = campo_precio_costo.value.strip().replace(",", ".")
+        if costo_str:
+            try:
+                float(costo_str)
+            except ValueError:
+                error_dialogo.value = "Valor inválido en «Precio costo»."
+                return False
+        for c in [campo_stock, campo_stock_min]:
+            val = c.value.strip()
             if val:
                 try:
-                    float(val)
+                    int(val)
                 except ValueError:
                     error_dialogo.value = f"Valor inválido en «{c.label}»."
                     return False
@@ -128,7 +144,6 @@ def vista_productos(page: ft.Page, area: ft.Column):
         campo_codigo.value          = str(producto["codigo"] or "")
         campo_descripcion.value     = producto["descripcion"] or ""
         campo_precio_costo.value    = str(producto["precio_costo"] or "")
-        campo_precio_venta.value    = str(producto["precio_venta"] or "")
         campo_stock.value           = str(producto["stock_actual"] or "")
         campo_stock_min.value       = str(producto["stock_minimo"] or "")
         campo_box.value             = producto["box"] or ""
@@ -141,6 +156,7 @@ def vista_productos(page: ft.Page, area: ft.Column):
         for s in obtener_secciones():
             if s["nombre"] == producto["seccion"]:
                 drop_seccion.value = str(s["id"])
+        actualizar_hint()
         dialogo.open = True
         page.update()
 
@@ -148,19 +164,25 @@ def vista_productos(page: ft.Page, area: ft.Column):
         if not validar_formulario():
             page.update()
             return
-        def v(c):
-            s = c.value.strip().replace(",", ".")
-            return float(s) if s else 0.0
+
+        costo_str = campo_precio_costo.value.strip().replace(",", ".")
+        costo     = float(costo_str) if costo_str else 0.0
+        pv, pd    = calcular_precios(costo_str) if costo > 0 else (0.0, 0.0)
+        precio_venta = pv or 0.0
+        precio_dolar = pd or 0.0
+
         def i(c):
             s = c.value.strip()
             return int(s) if s else 0
+
         datos = (
             campo_codigo.value.strip() or None,
             campo_descripcion.value.strip(),
             int(drop_categoria.value) if drop_categoria.value else None,
             int(drop_proveedor.value) if drop_proveedor.value else None,
-            v(campo_precio_costo),
-            v(campo_precio_venta),
+            costo,
+            precio_venta,
+            precio_dolar,
             i(campo_stock),
             i(campo_stock_min),
             int(drop_seccion.value) if drop_seccion.value else None,
@@ -186,8 +208,8 @@ def vista_productos(page: ft.Page, area: ft.Column):
                 controls=[
                     ft.Row([campo_codigo, campo_descripcion], spacing=12),
                     ft.Row([drop_categoria, drop_proveedor], spacing=12),
-                    ft.Row([campo_precio_costo, campo_precio_venta], spacing=12),
-                    hint_precio,
+                    campo_precio_costo,
+                    hint_calculo,
                     ft.Row([campo_stock, campo_stock_min], spacing=12),
                     ft.Divider(height=6),
                     ft.Row([drop_seccion, campo_box], spacing=12),
@@ -257,7 +279,8 @@ def vista_productos(page: ft.Page, area: ft.Column):
             ft.DataColumn(ft.Text("Sección",     weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)),
             ft.DataColumn(ft.Text("Box",         weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)),
             ft.DataColumn(ft.Text("P. Costo",    weight=ft.FontWeight.W_600, color=ft.Colors.WHITE), numeric=True),
-            ft.DataColumn(ft.Text("P. Venta",    weight=ft.FontWeight.W_600, color=ft.Colors.WHITE), numeric=True),
+            ft.DataColumn(ft.Text("USD",         weight=ft.FontWeight.W_600, color=ft.Colors.WHITE), numeric=True),
+            ft.DataColumn(ft.Text("P. Venta ($LED)", weight=ft.FontWeight.W_600, color=ft.Colors.WHITE), numeric=True),
             ft.DataColumn(ft.Text("Stock",       weight=ft.FontWeight.W_600, color=ft.Colors.WHITE), numeric=True),
             ft.DataColumn(ft.Text("Acciones",    weight=ft.FontWeight.W_600, color=ft.Colors.WHITE)),
         ],
@@ -283,15 +306,19 @@ def vista_productos(page: ft.Page, area: ft.Column):
                 ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=ft.Colors.AMBER_600, size=16,
                         tooltip=f"Stock bajo el mínimo ({p['stock_minimo']})")
             )
+        usd   = float(p["precio_dolar"] or 0)
+        venta = float(p["precio_venta"] or 0)
         return ft.DataRow(cells=[
-            ft.DataCell(ft.Text(str(p["codigo"] or ""), size=13)),
-            ft.DataCell(ft.Text(p["descripcion"] or "", size=13)),
-            ft.DataCell(ft.Text(p["categoria"] or "—", size=13, color=ft.Colors.GREY_600)),
-            ft.DataCell(ft.Text(p["proveedor"]  or "—", size=13, color=ft.Colors.GREY_600)),
-            ft.DataCell(ft.Text(p["seccion"]    or "—", size=13, color=ft.Colors.GREY_600)),
-            ft.DataCell(ft.Text(p["box"]        or "—", size=13, color=ft.Colors.GREY_600)),
-            ft.DataCell(ft.Text(f"$ {float(p['precio_costo']):,.2f}" if p["precio_costo"] else "—", size=13)),
-            ft.DataCell(ft.Text(f"$ {float(p['precio_venta']):,.2f}" if p["precio_venta"] else "—", size=13)),
+            ft.DataCell(ft.Text(str(p["codigo"] or ""),  size=13)),
+            ft.DataCell(ft.Text(p["descripcion"] or "",  size=13)),
+            ft.DataCell(ft.Text(p["categoria"]   or "—", size=13, color=ft.Colors.GREY_600)),
+            ft.DataCell(ft.Text(p["proveedor"]   or "—", size=13, color=ft.Colors.GREY_600)),
+            ft.DataCell(ft.Text(p["seccion"]     or "—", size=13, color=ft.Colors.GREY_600)),
+            ft.DataCell(ft.Text(p["box"]         or "—", size=13, color=ft.Colors.GREY_600)),
+            ft.DataCell(ft.Text(f"$ {float(p['precio_costo']):,.0f}" if p["precio_costo"] else "—", size=13)),
+            ft.DataCell(ft.Text(f"USD {usd:,.4f}" if usd else "—", size=13, color=ft.Colors.BLUE_300)),
+            ft.DataCell(ft.Text(f"$ {venta:,.0f}" if venta else "—", size=13,
+                                weight=ft.FontWeight.W_600)),
             ft.DataCell(ft.Row(spacing=4, controls=celda_stock)),
             ft.DataCell(ft.Row(spacing=0, controls=[
                 ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, tooltip="Editar", icon_size=18,
@@ -303,7 +330,8 @@ def vista_productos(page: ft.Page, area: ft.Column):
         ])
 
     def refrescar_tabla(filtro="", filtro_box=""):
-        nonlocal productos_cache
+        nonlocal productos_cache, config_cache
+        config_cache    = obtener_config()
         productos_cache = obtener_productos()
         actualizar_tabla(filtro, filtro_box)
 
